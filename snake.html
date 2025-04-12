@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Einfaches Snake Spiel</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column; /* Elemente untereinander anordnen */
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh; /* Mindesthöhe des Viewports */
+            margin: 0;
+            background-color: #f0f0f0; /* Heller Hintergrund */
+            font-family: sans-serif;
+        }
+        #spielbereich {
+            border: 5px solid #333; /* Dunklerer Rand */
+            background-color: #add8e6; /* Hellblauer Hintergrund für das Spielfeld */
+        }
+        #info {
+            margin-top: 20px; /* Abstand über der Info-Box */
+            text-align: center;
+        }
+        #gameOverAnzeige {
+            position: absolute; /* Positioniert über dem Canvas */
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            display: none; /* Standardmäßig ausgeblendet */
+            z-index: 10; /* Stellt sicher, dass es über dem Canvas liegt */
+        }
+        #neustartButton {
+            margin-top: 15px;
+            padding: 10px 20px;
+            font-size: 1em;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Snake Spiel</h1>
+
+    <canvas id="spielbereich" width="400" height="400"></canvas>
+
+    <div id="info">
+        <p>Score: <span id="scoreAnzeige">0</span></p>
+        <p>Steuerung mit Pfeiltasten.</p>
+    </div>
+
+    <div id="gameOverAnzeige">
+        <h2>Game Over!</h2>
+        <p>Dein Score: <span id="finalScoreAnzeige">0</span></p>
+        <button id="neustartButton">Neustart</button>
+    </div>
+
+    <script>
+        // --- Spiel Setup ---
+        const canvas = document.getElementById('spielbereich');
+        const ctx = canvas.getContext('2d');
+        const scoreAnzeige = document.getElementById('scoreAnzeige');
+        const gameOverAnzeige = document.getElementById('gameOverAnzeige');
+        const finalScoreAnzeige = document.getElementById('finalScoreAnzeige');
+        const neustartButton = document.getElementById('neustartButton');
+
+        const rasterGroesse = 20; // Größe jedes Quadrats im Raster
+        const canvasGroesse = canvas.width; // Annahme: Canvas ist quadratisch
+        const anzahlKacheln = canvasGroesse / rasterGroesse; // Anzahl Kacheln pro Reihe/Spalte
+
+        // Farben
+        const SCHLANGEN_FARBE = 'green';
+        const SCHLANGEN_RAND_FARBE = 'darkgreen';
+        const FUTTER_FARBE = 'red';
+        const FUTTER_RAND_FARBE = 'darkred';
+        const HINTERGRUND_FARBE = '#add8e6'; // Muss mit CSS übereinstimmen
+
+        // --- Spiel Zustand ---
+        let schlange; // Array von {x, y} Objekten
+        let futter;  // {x, y} Objekt
+        let dx; // Bewegungsrichtung X (1, -1 oder 0)
+        let dy; // Bewegungsrichtung Y (1, -1 oder 0)
+        let score;
+        let spielLaeuft;
+        let richtungWechselErlaubt; // Verhindert schnelles Umdrehen um 180 Grad
+        let spielGeschwindigkeit = 150; // Millisekunden pro Tick (kleiner = schneller)
+        let spielLoopTimeout; // Zum Speichern der Timeout-ID
+
+        // --- Spiel Funktionen ---
+
+        // Startet oder setzt das Spiel zurück
+        function initialisiereSpiel() {
+            // Startposition der Schlange (Mitte)
+            const startX = Math.floor(anzahlKacheln / 2);
+            const startY = Math.floor(anzahlKacheln / 2);
+            schlange = [
+                { x: startX, y: startY },      // Kopf
+                { x: startX - 1, y: startY }, // Körperteil 1
+                { x: startX - 2, y: startY }  // Körperteil 2
+            ];
+
+            // Startrichtung
+            dx = 1; // Nach rechts
+            dy = 0;
+
+            score = 0;
+            scoreAnzeige.textContent = score;
+            spielLaeuft = true;
+            richtungWechselErlaubt = true;
+            gameOverAnzeige.style.display = 'none'; // Game Over ausblenden
+
+            platziereFutter();
+            starteSpielLoop();
+        }
+
+        // Hauptschleife des Spiels
+        function spielLoop() {
+            if (!spielLaeuft) {
+                zeigeGameOver();
+                return; // Spiel beenden, wenn nicht mehr läuft
+            }
+
+             // Erlaube Richtungswechsel für den nächsten Frame
+            richtungWechselErlaubt = true;
+
+            // Timeout für den nächsten Frame setzen *bevor* der aktuelle Frame verarbeitet wird
+            // Das macht das Spiel etwas robuster gegen Verzögerungen
+            clearTimeout(spielLoopTimeout); // Vorherigen Timeout löschen (wichtig für Neustart)
+            spielLoopTimeout = setTimeout(() => {
+                loescheCanvas();
+                bewegeSchlange();
+                pruefeKollisionen(); // Kollisionen nach Bewegung prüfen
+                zeichneAlles();
+                spielLoop(); // Nächsten Loop aufrufen
+            }, spielGeschwindigkeit);
+        }
+
+        // Startet den Spiel-Loop
+        function starteSpielLoop() {
+             clearTimeout(spielLoopTimeout); // Sicherstellen, dass kein alter Loop läuft
+             spielLoop();
+        }
+
+        // Löscht den Canvas (malt den Hintergrund)
+        function loescheCanvas() {
+            ctx.fillStyle = HINTERGRUND_FARBE;
+            ctx.fillRect(0, 0, canvasGroesse, canvasGroesse);
+        }
+
+        // Zeichnet alle Spielelemente
+        function zeichneAlles() {
+            zeichneFutter();
+            zeichneSchlange();
+        }
+
+        // Zeichnet ein einzelnes Segment (Schlange oder Futter)
+        function zeichneSegment(x, y, farbe, randFarbe) {
+            ctx.fillStyle = farbe;
+            ctx.strokeStyle = randFarbe;
+            ctx.fillRect(x * rasterGroesse, y * rasterGroesse, rasterGroesse, rasterGroesse);
+            ctx.strokeRect(x * rasterGroesse, y * rasterGroesse, rasterGroesse, rasterGroesse);
+        }
+
+        // Zeichnet die komplette Schlange
+        function zeichneSchlange() {
+            schlange.forEach(segment => {
+                zeichneSegment(segment.x, segment.y, SCHLANGEN_FARBE, SCHLANGEN_RAND_FARBE);
+            });
+        }
+
+        // Zeichnet das Futter
+        function zeichneFutter() {
+            zeichneSegment(futter.x, futter.y, FUTTER_FARBE, FUTTER_RAND_FARBE);
+        }
+
+        // Bewegt die Schlange um eine Position
+        function bewegeSchlange() {
+            // Neuen Kopf basierend auf Richtung (dx, dy) berechnen
+            const kopf = { x: schlange[0].x + dx, y: schlange[0].y + dy };
+            schlange.unshift(kopf); // Neuen Kopf vorne hinzufügen
+
+            // Prüfen, ob Futter gefressen wurde
+            if (kopf.x === futter.x && kopf.y === futter.y) {
+                // Futter gefressen
+                score += 10;
+                scoreAnzeige.textContent = score;
+                platziereFutter();
+                // Schwierigkeit erhöhen (optional)
+                // if (score % 50 === 0 && spielGeschwindigkeit > 50) {
+                //     spielGeschwindigkeit -= 10;
+                // }
+            } else {
+                // Kein Futter gefressen -> letztes Segment entfernen
+                schlange.pop();
+            }
+        }
+
+        // Platziert Futter an einer zufälligen, freien Position
+        function platziereFutter() {
+            let neueFutterPosition;
+            do {
+                neueFutterPosition = {
+                    x: Math.floor(Math.random() * anzahlKacheln),
+                    y: Math.floor(Math.random() * anzahlKacheln)
+                };
+            } while (istAufSchlange(neueFutterPosition)); // Wiederholen, falls Futter auf Schlange landet
+
+            futter = neueFutterPosition;
+        }
+
+        // Hilfsfunktion: Prüft, ob eine Position von der Schlange besetzt ist
+        function istAufSchlange(position) {
+            return schlange.some(segment => segment.x === position.x && segment.y === position.y);
+        }
+
+        // Prüft auf Kollisionen (Wand oder Selbstkollision)
+        function pruefeKollisionen() {
+            const kopf = schlange[0];
+
+            // Wandkollision
+            if (kopf.x < 0 || kopf.x >= anzahlKacheln || kopf.y < 0 || kopf.y >= anzahlKacheln) {
+                spielLaeuft = false;
+                return;
+            }
+
+            // Selbstkollision (prüft, ob der Kopf auf einem anderen Körperteil liegt)
+            for (let i = 1; i < schlange.length; i++) {
+                if (kopf.x === schlange[i].x && kopf.y === schlange[i].y) {
+                    spielLaeuft = false;
+                    return;
+                }
+            }
+        }
+
+        // Verarbeitet Tastatureingaben zur Richtungsänderung
+        function aendereRichtung(event) {
+            if (!richtungWechselErlaubt) return; // Verhindert mehrere Wechsel pro Tick
+
+            const TASTE_LINKS = 37;
+            const TASTE_HOCH = 38;
+            const TASTE_RECHTS = 39;
+            const TASTE_RUNTER = 40;
+
+            const geheNachOben = dy === -1;
+            const geheNachUnten = dy === 1;
+            const geheNachRechts = dx === 1;
+            const geheNachLinks = dx === -1;
+
+            // `event.key` ist moderner, `event.keyCode` ist älter aber oft noch kompatibel
+            const gedrueckteTaste = event.key || event.keyCode;
+
+            // Verhindere 180-Grad-Drehungen
+            if ((gedrueckteTaste === 'ArrowLeft' || gedrueckteTaste === TASTE_LINKS) && !geheNachRechts) {
+                dx = -1; dy = 0; richtungWechselErlaubt = false;
+            } else if ((gedrueckteTaste === 'ArrowUp' || gedrueckteTaste === TASTE_HOCH) && !geheNachUnten) {
+                dx = 0; dy = -1; richtungWechselErlaubt = false;
+            } else if ((gedrueckteTaste === 'ArrowRight' || gedrueckteTaste === TASTE_RECHTS) && !geheNachLinks) {
+                dx = 1; dy = 0; richtungWechselErlaubt = false;
+            } else if ((gedrueckteTaste === 'ArrowDown' || gedrueckteTaste === TASTE_RUNTER) && !geheNachOben) {
+                dx = 0; dy = 1; richtungWechselErlaubt = false;
+            }
+        }
+
+        // Zeigt den Game Over Bildschirm an
+        function zeigeGameOver() {
+            clearTimeout(spielLoopTimeout); // Stoppt den Spiel-Loop sicher
+            finalScoreAnzeige.textContent = score;
+            gameOverAnzeige.style.display = 'block';
+        }
+
+        // --- Event Listener ---
+        document.addEventListener('keydown', aendereRichtung);
+        neustartButton.addEventListener('click', initialisiereSpiel);
+
+        // --- Spielstart ---
+        initialisiereSpiel(); // Das Spiel beim Laden der Seite starten
+
+    </script>
+
+</body>
+</html>
